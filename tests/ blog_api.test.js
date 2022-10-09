@@ -5,14 +5,33 @@ const Blog = require('../models/blog')
 
 const helper = require('./test_helper')
 const lodash = require('lodash')
+const User = require('../models/user')
 
 const api = supertest(app)
 
+const getToken = async (username, password) => {
+  const loginResponse = await api
+    .post('/api/login')
+    .send({ username: username, password: password })
+    .expect(200)
+  return loginResponse.body.token
+}
+
+const testUser = { name: 'Test', username: 'testuser', password: 'dummy' }
+
 beforeEach(async () => {
   await Blog.deleteMany({})
+  await User.deleteMany({})
+  const storedUser = await api
+    .post('/api/users')
+    .send(testUser)
+    .expect(201)
+  const token = await getToken(testUser.username, testUser.password)
   for (let blog of helper.initialBlogs) {
-    let blogObject = new Blog(blog)
-    await blogObject.save()
+    await api
+      .post('/api/blogs')
+      .set('Authorization', `bearer ${token}`)
+      .send({ ...blog, user: storedUser.body._id })
   }
 })
 
@@ -36,8 +55,12 @@ describe('creating blogs', () => {
     const newBlog = {
       author: 'New Man', title: 'My first blog', url: 'http://blogs.com', likes: 1337
     }
-    await api.post('/api/blogs').send(newBlog).expect(201)
-    
+    const token = await getToken(testUser.username, testUser.password)
+    await api.post('/api/blogs')
+      .set('Authorization', `bearer ${token}`)
+      .send(newBlog)
+      .expect(201)
+
     const response = await api.get('/api/blogs')
     expect(response.body).toHaveLength(helper.initialBlogs.length + 1)
     const titles = response.body.map(b => b.title)
@@ -47,23 +70,40 @@ describe('creating blogs', () => {
     const newBlog = {
       author: 'New Man', title: 'My first blog', url: 'http://blogs.com'
     }
-    const result = await api.post('/api/blogs').send(newBlog).expect(201)
+    const token = await getToken(testUser.username, testUser.password)
+    const result = await api
+      .post('/api/blogs')
+      .send(newBlog)
+      .set('Authorization', `bearer ${token}`)
+      .expect(201)
     expect(result.body.likes).toBe(0)
   })
   test('creating a blog without title will result in bad request', async () => {
     const newBlog = {
       author: 'New Man', url: 'http://blogs.com'
     }
-    const response = await api.post('/api/blogs').send(newBlog)
+    const token = await getToken(testUser.username, testUser.password)
+    const response = await api
+      .post('/api/blogs')
+      .set('Authorization', `bearer ${token}`)
+      .send(newBlog)
     expect(response.status).toBe(400)
+  })
+  test('creating a blog without auth token results in UNAUTHORIZED status', async () => {
+    await api
+      .post('/api/blogs')
+      .send({ author: 'whatever', url: 'whatever', title: 'title' })
+      .expect(401)
   })
 })
 describe('deleting blogs', () => {
   test('when a blog is deleted, it no longer exists', async () => {
     const blogsAtStart = await helper.blogsInDb()
     const blogToDelete = blogsAtStart[0]
-
-    await api.delete(`/api/blogs/${blogToDelete.id}`).expect(204)
+    const token = await getToken(testUser.username, testUser.password)
+    await api.delete(`/api/blogs/${blogToDelete.id}`)
+      .set('Authorization', `bearer ${token}`)
+      .expect(204)
 
     const blogsAtEnd = await helper.blogsInDb()
     expect(blogsAtEnd).toHaveLength(helper.initialBlogs.length - 1)
@@ -71,7 +111,10 @@ describe('deleting blogs', () => {
     expect(titles).not.toContain(blogToDelete.title)
   })
   test('deleting non-existing blog results in bad request', async () => {
-    await api.delete('/api/blogs/nonexisting').expect(400)
+    const token = await getToken(testUser.username, testUser.password)
+    await api.delete('/api/blogs/nonexisting')
+      .set('Authorization', `bearer ${token}`)
+      .expect(400)
   })
 })
 describe('updating blogs', () => {
